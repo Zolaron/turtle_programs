@@ -1,8 +1,5 @@
-
 -- building program using parmos style, may rewrite to use api?
 --[[ to do:
-use a string character count to adjust fuelneeded calcs
-add fuel needed count adjustment during build
 fix block not placed after load return
 fix len pos issues after load return
 work on api with separate progs, or combining this with run prog
@@ -10,28 +7,32 @@ work on api with separate progs, or combining this with run prog
 -- NOTE: coords and facing based on minecraft values so.. x=e+/w- y=up+/dn- z=n-/s+ f:0=s 1=w 2=n 3=e
 
 --[[ usage:
-place a box with fuel under the turtle and 4 stacks of 4 boxes around it (one on each side) for the materials
+cfg.home vars will be this starting point
+
+travel height variable (cfg.trvlY) should be enough to take it over the boxes. default is 10 up
+
+cfg.site vars are relative to the home point so should be adjusted as needed. default is 1 block up and 7 east
+
+at the home point, place a box with fuel under the turtle and 4 stacks of 4 boxes around it (one on each side) for the materials
 each box relates to a slot in the turtle inv. starting from the front of the turtle and going clockwise then up like this
 box slots top to bottom, turtle starts at level 0.
 (front)  0 4 8 C
-(left) 3 7 B F 
+(left) 3 7 B F
 (right) 1 5 9 D
 (back) 2 6 A E
 (A-F represent 10-15 so 0-15 = 16 slots)
+NOTE: turtle uses 1-16 to count slots, this program translates the characters required
 
-cfg.home vars will be this starting point
-travel height variable (cfg.trvlY) should be enough to take it over the boxes. default is 10 up
-cfg.site vars are relative to the home point so should be adjusted as needed. default is 1 block up and 7 east
-
-input design .bp file should have lines like this:
+input design .blp file should have lines like this:
 -0123453210-L
 -6789ABCDEF-^
-
-the hex numbers directly relate to the inv slots as mentioned above.
+the hex numbers directly relate to the box numbers mentioned above.
 # = blank space
 L = go to next line horizontally
-^ =  go up one floor
-so design should start from bottom and go up.
+^ =  go up one floor , so design should start from bottom and go up.
+
+-- the program checks the highest number used, this mean that the blueprints should be made using hex numbers 0-F in order,
+-- missing out numbers and not filling the respective boxes may result in the turtle not leaving a box at home area.
 ]]
 
 --declare variable array
@@ -43,11 +44,10 @@ cfg.siteY = 1
 cfg.siteZ = 3
 cfg.siteF = 0
 --travel height relative to home height of 0.
-cfg.trvlY = 5
+cfg.trvlY = 10
 -----------------------------------------
 --Custom Turtle Move/Interact functions--
 -----------------------------------------
-
 
 local function goUP()
 -- print("trying to go up")
@@ -55,6 +55,7 @@ local UP = turtle.up()
   if UP then
    cfg.Y = cfg.Y + 1
    --save()
+   cfg.fuelNeeded = cfg.fuelNeeded - 1
   end
 return UP
 end
@@ -65,6 +66,7 @@ local DOWN = turtle.down()
   if DOWN then
    cfg.Y = cfg.Y - 1
    --save()
+   cfg.fuelNeeded = cfg.fuelNeeded - 1
   end
 return DOWN
 end
@@ -83,6 +85,7 @@ if FORWARD then
    cfg.X = cfg.X + 1
   end
   --save()
+  cfg.fuelNeeded = cfg.fuelNeeded - 1
 end
 return FORWARD
 end
@@ -101,6 +104,7 @@ if BACKWARD then
    cfg.X = cfg.X - 1
   end
   --save()
+  cfg.fuelNeeded = cfg.fuelNeeded - 1
 end
 return BACKWARD
 end
@@ -221,14 +225,14 @@ print("trying to get to "..dest)
 if dest == "home" then
   cfg.status = 5
   --save()
- 
+
   --get to correct Z coord
   if cfg.Z < cfg.homeZ then
    turnFACE(0)
   else
    turnFACE(2)
   end
-  
+ 
   while cfg.Z ~= cfg.homeZ do
     digMOVEFORWARD()
   end
@@ -238,7 +242,7 @@ if dest == "home" then
   else
    turnFACE(1)
   end
- 
+
   while cfg.X ~= cfg.homeX do
     digMOVEFORWARD()
 
@@ -254,7 +258,7 @@ if dest == "home" then
   end
 
   turnFACE(cfg.homeF)
- 
+
   reachedDest = true
 end
 
@@ -268,7 +272,7 @@ if dest == "site" then
   else
    turnFACE(2)
   end
-  
+ 
   while cfg.Z ~= cfg.siteZ do
     digMOVEFORWARD()
   end
@@ -278,7 +282,7 @@ if dest == "site" then
   else
    turnFACE(1)
   end
- 
+
   while cfg.X ~= cfg.siteX do
     digMOVEFORWARD()
 
@@ -342,7 +346,6 @@ end
 --Build Functions--
 ------------------
 
-
 local function buildLoadBluprnt()
 print("loading blueprint")
 --**add a check for existing here?
@@ -366,6 +369,35 @@ h.close()
 end
 -- End function buildLoadBBluprnt()
 
+local function buildFindLastSlot() -- find out how many slots will be used ** - needs testing
+local i=0
+local a=""
+cfg.lastSlot = 1
+for i=0, 15 do
+  if i<10 then
+   a = tostring(i)
+  elseif i == 10 then
+   a = "A"
+  elseif i == 11 then
+   a = "B"
+  elseif i == 12 then
+   a = "C"
+  elseif i == 13 then
+   a = "D"
+  elseif i == 14 then
+   a = "E"
+  elseif i == 15 then
+   a = "F"
+  end
+ 
+  if string.find(bluPrnt, a) then
+   cfg.lastSlot = i + 1
+  end
+end
+
+end
+-- End function buildFindSlots()
+
 
 local function buildCheckLevels()
 cfg.fuel = turtle.getFuelLevel()
@@ -377,18 +409,46 @@ end
 local function buildCheckFuelNeeded()
 print("working out fuel needed")
 local total = 0
- 
- if (cfg.X ~= cfg.homeX and cfg.Y ~= cfg.homeY and cfg.Z ~= cfg.homeZ ) then
+local trvlDist = 0
+
+if (cfg.X ~= cfg.homeX and cfg.Y ~= cfg.homeY and cfg.Z ~= cfg.homeZ ) then
   if cfg.Y ~= cfg.trvlY then
-   if (cfg.X ~= cfg.siteX and cfg.Y ~= cfg.siteY and cfg.Z ~= cfg.siteZ ) then 
+   if (cfg.X ~= cfg.siteX and cfg.Y ~= cfg.siteY and cfg.Z ~= cfg.siteZ ) then
    gotoDEST("site")
    end
    toTRAVELHEIGHT()
   end
   gotoDEST("home")
- end
+end
 
-cfg.fuelNeeded = (cfg.fuelNeeded + total) + (tonumber(string.len(bluPrnt)) + 500) -- adds to current amount needed for calc mid mine + extra 500 just for a little spare
+if cfg.siteX > cfg.homeX then
+  trvlDist = trvlDist + (cfg.siteX - cfg.homeX)
+else 
+  trvlDist = trvlDist + (cfg.homeX - cfg.siteX)
+end
+
+if cfg.siteZ > cfg.homeZ then
+  trvlDist = trvlDist + (cfg.siteZ - cfg.homeZ)
+else 
+  trvlDist = trvlDist + (cfg.homeZ - cfg.siteZ)
+end  
+
+if cfg.trvlY > cfg.homeY then
+  trvlDist = trvlDist + (cfg.trvlY - cfg.homeY)
+else 
+  trvlDist = trvlDist + (cfg.homeY - cfg.trvlY)
+end  
+
+if cfg.trvlY > cfg.siteY then
+  trvlDist = trvlDist + (cfg.trvlY - cfg.siteY)
+else 
+  trvlDist = trvlDist + (cfg.siteY - cfg.trvlY)
+end  
+
+total = (trvlDist * (tonumber(string.len(bluPrnt)) / 32)) + tonumber(string.len(bluPrnt)) 
+-- rought total of movement needed based on trips to site for blocks and blueprint length
+
+cfg.fuelNeeded = (cfg.fuelNeeded + total + 100) -- adds to current amount needed for calc mid mine + extra 100 just for a little spare
 
 end
 -- End function buildCheckFuelNeeded()
@@ -409,19 +469,33 @@ turtle.drop(loadSlot)
 print("refueling")
 while cfg.fuel < cfg.fuelNeeded do
   turtle.suckDown()
-  turtle.refuel()
+  if turtle.getFuelLevel() ~= "unlimited" then -- this bit checks to make sure fuel is not consumed beyond the max fuel limit of the turtle.
+    if turtle.getFuelLimit() then
+      while turtle.getFuelLevel() < turtle.getFuelLimit() and turtle.getItemCount(loadSlot) > 0 do
+        turtle.refuel(1)
+      end
+    else
+      turtle.refuel()
+    end
+  end
   buildCheckLevels()
+  sleep(2)
 end
+turtle.dropDown(loadSlot) --drop any fuel left that was not needed to reach max fuel limit
 
 print("reloading")
-for loadSlot = 1, 16 do
-  if turtle.getItemCount(loadSlot) == 0 then
-   turtle.select(loadSlot)
-   turtle.suck()
+for loadSlot = 1, cfg.lastSlot do
+  turtle.select(loadSlot)
+  while turtle.getItemCount(loadSlot) == 0 do
+    turtle.suck()
+     if turtle.getItemCount(loadSlot) == 0 then
+       print("need more blocks for slot "..loadSlot)
+       sleep(3)
+     end
   end
   goRIGHT()
   if loadSlot % 4 == 0 then
-   goUP()
+    goUP()
   end
 end
 --[[** empty slot 1 suckdown to get fuel into slot 1, refuel and grab stack from slot 1. then do function to rotate right and rise filling each slot.
@@ -452,6 +526,7 @@ cfg.homeZ = 0
 cfg.homeF = 0
 cfg.fuelNeeded = 0
 buildLoadBluprnt()
+buildFindLastSlot()
 buildCheckFuelNeeded()
 if cfg.fuel < cfg.fuelNeeded then
   buildLoadRefuel()
@@ -475,11 +550,11 @@ end
 
 
 local function buildLaneStart()
- local j = 0
- print("going to start of lane")
- for j = 0, cfg.lenPos - 1 do
+local j = 0
+print("going to start of lane")
+for j = 0, cfg.lenPos - 1 do
   goBACKWARD()
- end
+end
 end
 --End function buildLaneStart()
 
@@ -497,86 +572,94 @@ end
 --End function buildNewLane()
 
 local function buildFloorStart()
- local j = 0
- buildLaneStart()
- print("going to start of floor")
- goRIGHT()
- for j = 0, cfg.widPos - 1 do
+local j = 0
+buildLaneStart()
+print("going to start of floor")
+goRIGHT()
+for j = 0, cfg.widPos - 1 do
   goBACKWARD()
- end
- goLEFT()
+end
+goLEFT()
 end
 --End function buildFloorStart()
 
 
 local function buildNewFloor()
- buildFloorStart()
- print("new floor")
- cfg.lenPos = 0
- cfg.widPos = 0
- goUP()
- cfg.floorPos = cfg.floorPos + 1
+buildFloorStart()
+print("new floor")
+cfg.lenPos = 0
+cfg.widPos = 0
+goUP()
+cfg.floorPos = cfg.floorPos + 1
 end
 --End function buildNewFloor()
 
 local function buildStartPos()
- local j = 0
- buildFloorStart()
- print ("going to start of build")
- goBACKWARD()
- for j = 0, cfg.floorPos -1 do
+local j = 0
+buildFloorStart()
+print ("going to start of build")
+goBACKWARD()
+for j = 0, cfg.floorPos -1 do
   goDOWN()
- end
+end
 end
 -- End function buildStartPos()
 
 
 local function buildLoadAndReturn()
- buildStartPos()
- buildLoadRefuel()
- local flr = 0
- local wid = 0
- local len = 0
- print ("going back to place")
- while flr ~= cfg.floorPos do
+buildStartPos()
+buildLoadRefuel()
+local flr = 0
+local wid = 0
+local len = 0
+print ("going back to place")
+while flr ~= cfg.floorPos do
   goUP()
   flr = flr + 1
- end
- goFORWARD()
- goRIGHT()
- while wid ~= cfg.widPos do
+end
+goFORWARD()
+goRIGHT()
+while wid ~= cfg.widPos do
   goFORWARD()
   wid = wid + 1
- end
- goLEFT()
- while len ~= cfg.lenPos do
+end
+goLEFT()
+while len ~= cfg.lenPos do
   goFORWARD()
   len = len + 1
- end
+end
 end
 -- End function buildLoadAndReturn()
 
 
 local function buildPlace()
 --print ("placing a block")
- if cfg.slot < 16 then --**test if this errors when 99 the slot
-  turtle.select(cfg.slot+1)
-  if turtle.getItemCount(cfg.slot+1) > 0 then
-   turtle.placeDown()
+if cfg.slot < 17 then --**test if this errors when 99 the slot
+  turtle.select(cfg.slot)
+  if turtle.getItemCount(cfg.slot) > 0 then
+    if turtle.detectDown() then
+       if not turtle.compareDown() then
+         turtle.digDown()
+         turtle.placeDown()
+       end
+     else
+      turtle.placeDown()
+    end
   else
    buildLoadAndReturn()
   end
- end
+   
+end
 end
 -- End function buildPlace()
 
 
 local function buildMain()
- buildGUI()
- goFORWARD()
- for i=1,string.len(bluPrnt) do
+buildGUI()
+goFORWARD()
+for i=1,string.len(bluPrnt) do
   a = string.sub(bluPrnt,i,i)
-  --print (a) 
+  --print (a)
   if a == "L" then
    buildNewLane()
    cfg.slot = 99
@@ -585,19 +668,19 @@ local function buildMain()
    cfg.slot = 99
   else
    if tonumber(a) then
-    cfg.slot = tonumber(a)
+    cfg.slot = (tonumber(a) + 1)
    elseif a == "A" then
-    cfg.slot = 10
-   elseif a == "B" then
     cfg.slot = 11
-   elseif a == "C" then
+   elseif a == "B" then
     cfg.slot = 12
-   elseif a == "D" then
+   elseif a == "C" then
     cfg.slot = 13
-   elseif a == "E" then
+   elseif a == "D" then
     cfg.slot = 14
-   elseif a == "F" then
+   elseif a == "E" then
     cfg.slot = 15
+   elseif a == "F" then
+    cfg.slot = 16
    elseif a == "#" then
     cfg.slot = 99
    else
@@ -616,9 +699,9 @@ local function buildMain()
   end
   buildGUI()
   --save()
- end
- toTRAVELHEIGHT()
- gotoDEST("home")
+end
+toTRAVELHEIGHT()
+gotoDEST("home")
 end
 --End function buildMain()
 
@@ -628,4 +711,3 @@ end
 buildInit()
 buildLoadRefuel()
 buildMain()
-
